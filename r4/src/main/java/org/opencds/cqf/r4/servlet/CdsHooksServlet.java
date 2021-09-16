@@ -6,6 +6,7 @@ import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
@@ -36,16 +37,15 @@ import org.opencds.cqf.cds.request.Request;
 import org.opencds.cqf.cds.response.CdsCard;
 import org.opencds.cqf.common.config.HapiProperties;
 import org.opencds.cqf.common.exceptions.InvalidRequestException;
-import org.opencds.cqf.common.providers.LibraryResolutionProvider;
+import org.opencds.cqf.common.helpers.LoggingHelper;
 import org.opencds.cqf.common.retrieve.JpaFhirRetrieveProvider;
 import org.opencds.cqf.cql.engine.data.CompositeDataProvider;
-import org.opencds.cqf.cql.engine.debug.DebugMap;
 import org.opencds.cqf.cql.engine.exception.CqlException;
 import org.opencds.cqf.cql.engine.execution.Context;
 import org.opencds.cqf.cql.engine.execution.LibraryLoader;
 import org.opencds.cqf.cql.engine.fhir.exception.DataProviderException;
-import org.opencds.cqf.cql.engine.fhir.model.R4FhirModelResolver;
-import org.opencds.cqf.r4.helpers.LibraryHelper;
+import org.opencds.cqf.cql.engine.model.ModelResolver;
+import org.opencds.cqf.cql.engine.terminology.TerminologyProvider;
 import org.opencds.cqf.r4.providers.PlanDefinitionApplyProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,8 +53,10 @@ import org.springframework.context.ApplicationContext;
 
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.context.FhirVersionEnum;
-import ca.uhn.fhir.cql.r4.provider.JpaTerminologyProvider;
+import ca.uhn.fhir.cql.common.provider.LibraryResolutionProvider;
 import ca.uhn.fhir.rest.server.exceptions.BaseServerResponseException;
+
+import org.opencds.cqf.r4.helpers.LibraryHelper;
 
 @WebServlet(name = "cds-services")
 public class CdsHooksServlet extends HttpServlet {
@@ -68,9 +70,13 @@ public class CdsHooksServlet extends HttpServlet {
 
     private JpaFhirRetrieveProvider fhirRetrieveProvider;
 
-    private JpaTerminologyProvider jpaTerminologyProvider;
+    private TerminologyProvider serverTerminologyProvider;
 
     private ProviderConfiguration providerConfiguration;
+
+    private ModelResolver modelResolver;
+
+    private LibraryHelper libraryHelper;
 
     @SuppressWarnings("unchecked")
     @Override
@@ -83,7 +89,9 @@ public class CdsHooksServlet extends HttpServlet {
         this.planDefinitionProvider = appCtx.getBean(PlanDefinitionApplyProvider.class);
         this.libraryResolutionProvider = (LibraryResolutionProvider<org.hl7.fhir.r4.model.Library>)appCtx.getBean(LibraryResolutionProvider.class);
         this.fhirRetrieveProvider = appCtx.getBean(JpaFhirRetrieveProvider.class);
-        this.jpaTerminologyProvider = appCtx.getBean(JpaTerminologyProvider.class);
+        this.serverTerminologyProvider = appCtx.getBean(TerminologyProvider.class);
+        this.modelResolver = appCtx.getBean("r4ModelResolver", ModelResolver.class);
+        this.libraryHelper = appCtx.getBean(LibraryHelper.class);
     }
 
     protected ProviderConfiguration getProviderConfiguration() {
@@ -140,7 +148,8 @@ public class CdsHooksServlet extends HttpServlet {
 
             Hook hook = HookFactory.createHook(cdsHooksRequest);
 
-            logger.info("cds-hooks hook: " + hook.getRequest().getHook());
+            String hookName = hook.getRequest().getHook();
+            logger.info("cds-hooks hook: " + hookName);
             logger.info("cds-hooks hook instance: " + hook.getRequest().getHookInstance());
             logger.info("cds-hooks maxCodesPerQuery: " + this.getProviderConfiguration().getMaxCodesPerQuery());
             logger.info("cds-hooks expandValueSets: " + this.getProviderConfiguration().getExpandValueSets());
@@ -151,35 +160,48 @@ public class CdsHooksServlet extends HttpServlet {
 
             PlanDefinition planDefinition = planDefinitionProvider.getDao()
                     .read(new IdType(hook.getRequest().getServiceName()));
-            LibraryLoader libraryLoader = LibraryHelper.createLibraryLoader(libraryResolutionProvider);
-            Library library = LibraryHelper.resolvePrimaryLibrary(planDefinition, libraryLoader,
+            AtomicBoolean planDefinitionHookMatchesRequestHook = new AtomicBoolean(false);
+
+            planDefinition.getAction().forEach(action -> {
+                action.getTrigger().forEach(trigger -> {
+                    if(hookName.equals(trigger.getName())){
+                        planDefinitionHookMatchesRequestHook.set(true);
+                        return;
+                    }
+                });
+                if(planDefinitionHookMatchesRequestHook.get()){
+                    return;
+                }
+            });
+            if(!planDefinitionHookMatchesRequestHook.get()){
+                throw new ServletException("ERROR: Request hook does not match the service called.");
+            }
+            LibraryLoader libraryLoader = this.libraryHelper.createLibraryLoader(libraryResolutionProvider);
+            Library library = this.libraryHelper.resolvePrimaryLibrary(planDefinition, libraryLoader,
                     libraryResolutionProvider);
 
-            R4FhirModelResolver resolver = new R4FhirModelResolver();
-            CompositeDataProvider provider = new CompositeDataProvider(resolver, fhirRetrieveProvider);
+            CompositeDataProvider provider = new CompositeDataProvider(this.modelResolver, fhirRetrieveProvider);
 
             Context context = new Context(library);
 
-            DebugMap debugMap = new DebugMap();
-            debugMap.setIsLoggingEnabled(true);
-            context.setDebugMap(debugMap);
+            context.setDebugMap(LoggingHelper.getDebugMap());
 
             context.registerDataProvider("http://hl7.org/fhir", provider); // TODO make sure tooling handles remote
                                                                            // provider case
-            context.registerTerminologyProvider(jpaTerminologyProvider);
+            context.registerTerminologyProvider(serverTerminologyProvider);
             context.registerLibraryLoader(libraryLoader);
             context.setContextValue("Patient", hook.getRequest().getContext().getPatientId().replace("Patient/", ""));
             context.setExpressionCaching(true);
 
             EvaluationContext<PlanDefinition> evaluationContext = new R4EvaluationContext(hook, version,
-                    FhirContext.forR4().newRestfulGenericClient(baseUrl), jpaTerminologyProvider, context, library,
-                    planDefinition, this.getProviderConfiguration());
+                    FhirContext.forCached(FhirVersionEnum.R4).newRestfulGenericClient(baseUrl), serverTerminologyProvider, context, library,
+                    planDefinition, this.getProviderConfiguration(), this.modelResolver);
 
             this.setAccessControlHeaders(response);
 
             response.setHeader("Content-Type", ContentType.APPLICATION_JSON.getMimeType());
 
-            R4HookEvaluator evaluator = new R4HookEvaluator();
+            R4HookEvaluator evaluator = new R4HookEvaluator(this.modelResolver);
 
             String jsonResponse = toJsonResponse(evaluator.evaluate(evaluationContext));
 
@@ -278,7 +300,7 @@ public class CdsHooksServlet extends HttpServlet {
 
     private JsonObject getServices() {
         DiscoveryResolutionR4 discoveryResolutionR4 = new DiscoveryResolutionR4(
-                FhirContext.forR4().newRestfulGenericClient(HapiProperties.getServerAddress()));
+            FhirContext.forCached(FhirVersionEnum.R4).newRestfulGenericClient(HapiProperties.getServerAddress()));
         discoveryResolutionR4.setMaxUriLength(this.getProviderConfiguration().getMaxUriLength());
         return discoveryResolutionR4.resolve()
                         .getAsJson();

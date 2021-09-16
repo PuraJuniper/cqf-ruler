@@ -54,7 +54,7 @@ public class JpaFhirRetrieveProvider extends SearchParamFhirRetrieveProvider {
     protected Collection<Object> executeQuery(String dataType, SearchParameterMap map) {
         // TODO: Once HAPI breaks this out from the server dependencies
         // we can include it on its own.
-        ca.uhn.fhir.jpa.searchparam.SearchParameterMap hapiMap = new ca.uhn.fhir.jpa.searchparam.SearchParameterMap();
+        ca.uhn.fhir.jpa.searchparam.SearchParameterMap hapiMap = ca.uhn.fhir.jpa.searchparam.SearchParameterMap.newSynchronous();
         try {
 
             Method[] methods = hapiMap.getClass().getDeclaredMethods();
@@ -75,12 +75,12 @@ public class JpaFhirRetrieveProvider extends SearchParamFhirRetrieveProvider {
 
         IBundleProvider bundleProvider = dao.search(hapiMap);
         if (bundleProvider.size() == null) {
-            return resolveResourceList(bundleProvider.getResources(0, 10000));
+            return resolveResourceList(bundleProvider.getAllResources());
         }
         if (bundleProvider.size() == 0) {
             return new ArrayList<>();
         }
-        List<IBaseResource> resourceList = bundleProvider.getResources(0, bundleProvider.size());
+        List<IBaseResource> resourceList = bundleProvider.getAllResources();
         return resolveResourceList(resourceList);
     }
 

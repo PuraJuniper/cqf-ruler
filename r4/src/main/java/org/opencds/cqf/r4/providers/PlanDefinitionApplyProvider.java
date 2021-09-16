@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.UUID;
 
 import javax.inject.Inject;
+import javax.inject.Named;
 
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.r4.model.ActivityDefinition;
@@ -24,7 +25,6 @@ import org.hl7.fhir.r4.model.Resource;
 import org.hl7.fhir.r4.model.StringType;
 import org.opencds.cqf.common.config.HapiProperties;
 import org.opencds.cqf.cql.engine.execution.Context;
-import org.opencds.cqf.cql.engine.fhir.model.R4FhirModelResolver;
 import org.opencds.cqf.cql.engine.model.ModelResolver;
 import org.opencds.cqf.cql.engine.runtime.DateTime;
 import org.opencds.cqf.r4.builders.AttachmentBuilder;
@@ -67,9 +67,9 @@ public class PlanDefinitionApplyProvider {
     public PlanDefinitionApplyProvider(FhirContext fhirContext,
             ActivityDefinitionApplyProvider activityDefinitionApplyProvider,
             IFhirResourceDao<PlanDefinition> planDefinitionDao,
-            IFhirResourceDao<ActivityDefinition> activityDefinitionDao, CqlExecutionProvider executionProvider) {
+            IFhirResourceDao<ActivityDefinition> activityDefinitionDao, CqlExecutionProvider executionProvider, @Named("r4ModelResolver") ModelResolver modelResolver) {
         this.executionProvider = executionProvider;
-        this.modelResolver = new R4FhirModelResolver();
+        this.modelResolver = modelResolver;
         this.activityDefinitionApplyProvider = activityDefinitionApplyProvider;
         this.planDefinitionDao = planDefinitionDao;
         this.activityDefinitionDao = activityDefinitionDao;

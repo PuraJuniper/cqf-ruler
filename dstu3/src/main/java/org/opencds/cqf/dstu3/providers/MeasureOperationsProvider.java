@@ -1,6 +1,7 @@
 package org.opencds.cqf.dstu3.providers;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -11,17 +12,17 @@ import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.servlet.http.HttpServletRequest;
 
-import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
-import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
-import ca.uhn.fhir.jpa.api.dao.IFhirSystemDao;
 import org.hl7.fhir.dstu3.model.Bundle;
+import org.hl7.fhir.dstu3.model.Bundle.BundleEntryComponent;
 import org.hl7.fhir.dstu3.model.CodeableConcept;
 import org.hl7.fhir.dstu3.model.Coding;
 import org.hl7.fhir.dstu3.model.Composition;
 import org.hl7.fhir.dstu3.model.DetectedIssue;
+import org.hl7.fhir.dstu3.model.Device;
 import org.hl7.fhir.dstu3.model.Extension;
 import org.hl7.fhir.dstu3.model.Group;
 import org.hl7.fhir.dstu3.model.IdType;
+import org.hl7.fhir.dstu3.model.Identifier;
 import org.hl7.fhir.dstu3.model.Library;
 import org.hl7.fhir.dstu3.model.ListResource;
 import org.hl7.fhir.dstu3.model.Measure;
@@ -38,13 +39,16 @@ import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.instance.model.api.IAnyResource;
 import org.hl7.fhir.instance.model.api.IBase;
 import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.opencds.cqf.common.config.HapiProperties;
 import org.opencds.cqf.common.evaluation.EvaluationProviderFactory;
-import org.opencds.cqf.common.providers.LibraryResolutionProvider;
+import org.opencds.cqf.common.helpers.DateHelper;
 import org.opencds.cqf.cql.engine.data.DataProvider;
 import org.opencds.cqf.cql.engine.execution.LibraryLoader;
 import org.opencds.cqf.dstu3.evaluation.MeasureEvaluation;
 import org.opencds.cqf.dstu3.evaluation.MeasureEvaluationSeed;
 import org.opencds.cqf.dstu3.helpers.LibraryHelper;
+import org.opencds.cqf.tooling.common.CqfmSoftwareSystem;
+import org.opencds.cqf.tooling.common.stu3.CqfmSoftwareSystemHelper;
 import org.opencds.cqf.tooling.library.stu3.NarrativeProvider;
 import org.opencds.cqf.tooling.measure.stu3.CqfMeasure;
 import org.slf4j.Logger;
@@ -52,7 +56,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import ca.uhn.fhir.context.BaseRuntimeChildDefinition;
-
+import ca.uhn.fhir.cql.common.provider.LibraryResolutionProvider;
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.api.dao.IFhirSystemDao;
 import ca.uhn.fhir.jpa.rp.dstu3.MeasureResourceProvider;
 import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
 import ca.uhn.fhir.rest.annotation.IdParam;
@@ -61,6 +68,7 @@ import ca.uhn.fhir.rest.annotation.OperationParam;
 import ca.uhn.fhir.rest.api.MethodOutcome;
 import ca.uhn.fhir.rest.api.RestOperationTypeEnum;
 import ca.uhn.fhir.rest.api.server.RequestDetails;
+import ca.uhn.fhir.rest.param.StringParam;
 import ca.uhn.fhir.rest.param.TokenParam;
 import ca.uhn.fhir.rest.server.exceptions.InternalErrorException;
 
@@ -75,6 +83,9 @@ public class MeasureOperationsProvider {
     private MeasureResourceProvider measureResourceProvider;
     private DaoRegistry registry;
     private EvaluationProviderFactory factory;
+    private LibraryHelper libraryHelper;
+    
+    private String serverAddress = HapiProperties.getServerAddress();
 
     private static final Logger logger = LoggerFactory.getLogger(MeasureOperationsProvider.class);
 
@@ -82,15 +93,16 @@ public class MeasureOperationsProvider {
     public MeasureOperationsProvider(DaoRegistry registry, EvaluationProviderFactory factory,
             NarrativeProvider narrativeProvider, HQMFProvider hqmfProvider,
             LibraryResolutionProvider<Library> libraryResolutionProvider,
-            MeasureResourceProvider measureResourceProvider) {
+            MeasureResourceProvider measureResourceProvider, DataRequirementsProvider dataRequirementsProvider, LibraryHelper libraryHelper) {
         this.registry = registry;
         this.factory = factory;
 
         this.libraryResolutionProvider = libraryResolutionProvider;
         this.narrativeProvider = narrativeProvider;
         this.hqmfProvider = hqmfProvider;
-        this.dataRequirementsProvider = new DataRequirementsProvider();
+        this.dataRequirementsProvider = dataRequirementsProvider;
         this.measureResourceProvider = measureResourceProvider;
+        this.libraryHelper = libraryHelper;
     }
 
     @Operation(name = "$hqmf", idempotent = true, type = Measure.class)
@@ -176,9 +188,9 @@ public class MeasureOperationsProvider {
             @OperationParam(name = "lastReceivedOn") String lastReceivedOn,
             @OperationParam(name = "source") String source, @OperationParam(name = "user") String user,
             @OperationParam(name = "pass") String pass) throws InternalErrorException, FHIRException {
-        LibraryLoader libraryLoader = LibraryHelper.createLibraryLoader(this.libraryResolutionProvider);
+        LibraryLoader libraryLoader = this.libraryHelper.createLibraryLoader(this.libraryResolutionProvider);
         MeasureEvaluationSeed seed = new MeasureEvaluationSeed(this.factory, libraryLoader,
-                this.libraryResolutionProvider);
+                this.libraryResolutionProvider, this.libraryHelper);
         Measure measure = this.measureResourceProvider.getDao().read(theId);
 
         if (measure == null) {
@@ -257,6 +269,7 @@ public class MeasureOperationsProvider {
         //TODO: topic should allow many and be a union of them
         //TODO: "The Server needs to make sure that practitioner is authorized to get the gaps in care report for and know what measures the practitioner are eligible or qualified."
         Parameters returnParams = new Parameters();
+        returnParams.setId((UUID.randomUUID().toString()));
         if(careGapParameterValidation(periodStart, periodEnd, subject, topic, practitioner, measure, status, organization)) {
             if(subject.startsWith("Patient/")){
                 returnParams.addParameter(new Parameters.ParametersParameterComponent()
@@ -264,7 +277,7 @@ public class MeasureOperationsProvider {
                         .setResource(patientCareGap(periodStart, periodEnd, subject, topic, measure, status)));
                 return returnParams;
             }else if(subject.startsWith("Group/")) {
-                returnParams.setId((status==null?"all-gaps": status) + "-" + subject.replace("/","_") + "-report");
+                returnParams.setId((status==null?"all-gaps": status) + "-" + subject.replace("/","-") + "-report");
                 (getPatientListFromGroup(subject))
                     .forEach(groupSubject ->{
                         Bundle patientGapBundle = patientCareGap(periodStart, periodEnd, groupSubject, topic, measure, status);
@@ -292,11 +305,22 @@ public class MeasureOperationsProvider {
         DataProvider dataProvider = this.factory.createDataProvider("FHIR", "3");
         Iterable<Object> groupRetrieve = dataProvider.retrieve("Group", "id", subjectGroupRef, "Group", null, null, null,
                 null, null, null, null, null);
-        Group group;
-        if (groupRetrieve.iterator().hasNext()) {
-            group = (Group) groupRetrieve.iterator().next();
-            group.getMember().forEach(member -> patientList.add(member.getEntity().getReference()));
+        if (!groupRetrieve.iterator().hasNext()) {
+            throw new RuntimeException("Could not find Group/" + subjectGroupRef);
         }
+  
+        Group group = (Group) groupRetrieve.iterator().next();           
+        group.getMember().forEach(member -> { 
+            Reference reference = member.getEntity();
+            if (reference.getReferenceElement().getResourceType().equals("Patient")) {
+                patientList.add(reference.getReference());
+            } else if (reference.getReferenceElement().getResourceType().equals("Group")) {
+                patientList.addAll(getPatientListFromGroup(reference.getReference()));
+            } else {
+                logger.info(String.format("Group member was not a Patient or a Group, so skipping. \n%s", reference.getReference()));
+            }
+        });
+     
         return patientList;
     }
 
@@ -331,9 +355,9 @@ public class MeasureOperationsProvider {
     private Bundle patientCareGap(String periodStart, String periodEnd, String subject, String topic, String measure, String status) {
         //TODO: this is an org hack.  Need to figure out what the right thing is.
         IFhirResourceDao<Organization> orgDao = this.registry.getResourceDao(Organization.class);
-        List<IBaseResource> org = orgDao.search(new SearchParameterMap()).getResources(0, 1);
+        List<IBaseResource> org = orgDao.search(SearchParameterMap.newSynchronous()).getResources(0, 1);
 
-        SearchParameterMap theParams = new SearchParameterMap();
+        SearchParameterMap theParams = SearchParameterMap.newSynchronous();
 
         // if (theId != null) {
         //     var measureParam = new StringParam(theId.getIdPart());
@@ -360,7 +384,13 @@ public class MeasureOperationsProvider {
                         .addCoding(new Coding()
                                 .setCode("gaps-doc")
                                 .setSystem("http://hl7.org/fhir/us/davinci-deqm/CodeSystem/gaps-doc-type")
-                                .setDisplay("Gaps in Care Report")));
+                                .setDisplay("Gaps in care report")));
+
+        CqfmSoftwareSystem cqfRulerSoftwareSystem = new CqfmSoftwareSystem("cqf-ruler", MeasureOperationsProvider.class.getPackage().getImplementationVersion(), MeasureOperationsProvider.class.getPackage().getImplementationVersion());
+        CqfmSoftwareSystemHelper helper = new CqfmSoftwareSystemHelper();
+        Device device = helper.createSoftwareSystemDevice(cqfRulerSoftwareSystem);
+        composition.setAuthor(Arrays.asList(new Reference(device)));
+        careGapReport.addEntry(new BundleEntryComponent().setResource(device).setFullUrl(getFullUrl(device.fhirType(), device.getIdElement().getIdPart())));
 
         List<MeasureReport> reports = new ArrayList<>();
         List<DetectedIssue> detectedIssues = new ArrayList<DetectedIssue>();
@@ -463,38 +493,29 @@ public class MeasureOperationsProvider {
                 // TODO - add other types of improvement notation cases
             }
         }
-        Parameters parameters = new Parameters();
         if((null == status || status == "")                                 //everything
                 || (hasIssue && !"closed-gap".equalsIgnoreCase(status))     //filter out closed-gap that has issues  for OPEN-GAP
                 ||(!hasIssue && !"open-gap".equalsIgnoreCase(status))){     //filet out open-gap without issues  for CLOSE-GAP
-            careGapReport.addEntry(new Bundle.BundleEntryComponent().setResource(composition));
+            careGapReport.addEntry(new Bundle.BundleEntryComponent().setResource(composition).setFullUrl(getFullUrl(composition.fhirType(), composition.getIdElement().getIdPart())));
             for (MeasureReport rep : reports) {
-                careGapReport.addEntry(new Bundle.BundleEntryComponent().setResource(rep));
-                if (report.hasContained()) {
-                    for (Resource contained : report.getContained()) {
-                        if (contained instanceof Bundle) {
-                            addEvaluatedResourcesToParameters((Bundle) contained, parameters);
-                            if(null != parameters && !parameters.isEmpty()) {
-                                List <Reference> evaluatedResource = new ArrayList<>();
-                                parameters.getParameter().forEach(parameter -> {
-                                    Reference newEvaluatedResourceItem = new Reference();
-                                    newEvaluatedResourceItem.setReference(parameter.getResource().getId());
-                                    List<Extension> evalResourceExt = new ArrayList<>();
-                                    evalResourceExt.add(new Extension("http://hl7.org/fhir/us/davinci-deqm/StructureDefinition/extension-ppopulationReference",
-                                            new CodeableConcept()
-                                                    .addCoding(new Coding("http://teminology.hl7.org/CodeSystem/measure-population", "initial-population", "initial-population"))));
-                                    newEvaluatedResourceItem.setExtension(evalResourceExt);
-                                    evaluatedResource.add(newEvaluatedResourceItem);
-                                });
-                                // TODO: Figure out for DSTU3
-                                //report.setEvaluatedResource(evaluatedResource);
-                            }
+                careGapReport.addEntry(new Bundle.BundleEntryComponent().setResource(rep).setFullUrl(getFullUrl(rep.fhirType(), rep.getIdElement().getIdPart())));
+                if (report.hasEvaluatedResources()) {
+                    IBaseResource evaluatedResourcesBaseBundle = registry.getResourceDao("Bundle").read(report.getEvaluatedResources().getReferenceElement());
+                    if (evaluatedResourcesBaseBundle == null || !(evaluatedResourcesBaseBundle instanceof Bundle)) {
+                        logger.debug("evaluatedResourcesReference must be a local bundle.");
+                        throw new RuntimeException(String.format("No local Bundle found for %s: ", report.getEvaluatedResources().getReference()));
+                    }
+                    Bundle evaluatedResourcesBundle = (Bundle) evaluatedResourcesBaseBundle;
+                    for (BundleEntryComponent entry : evaluatedResourcesBundle.getEntry()) {
+                        Resource resource = entry.getResource();
+                        if (resource != null) {
+                            careGapReport.addEntry(new Bundle.BundleEntryComponent().setResource(resource).setFullUrl(getFullUrl(resource.fhirType(), resource.getIdElement().getIdPart())));
                         }
                     }
                 }
             }
             for (DetectedIssue detectedIssue : detectedIssues) {
-                careGapReport.addEntry(new Bundle.BundleEntryComponent().setResource(detectedIssue));
+                careGapReport.addEntry(new Bundle.BundleEntryComponent().setResource(detectedIssue).setFullUrl(getFullUrl(detectedIssue.fhirType(), detectedIssue.getIdElement().getIdPart())));
             }
         }
         if(careGapReport.getEntry().isEmpty()){
@@ -503,13 +524,18 @@ public class MeasureOperationsProvider {
         return careGapReport;
     }
 
+    private String getFullUrl(String fhirType, String elementId) {
+        String fullUrl = String.format("%s%s/%s", serverAddress, fhirType, elementId);
+        return fullUrl;
+    }
+
     private List<IBaseResource> getMeasureList(SearchParameterMap theParams, String measure){
         if(measure != null && measure.length() > 0){
             List<IBaseResource> finalMeasureList = new ArrayList<>();
             List<IBaseResource> allMeasures = this.measureResourceProvider
                     .getDao()
                     .search(theParams)
-                    .getResources(0, 1000);
+                    .getAllResources();
             for(String singleName: measure.split(",")){
                 if (singleName.equals("")) {
                     continue;
@@ -526,11 +552,90 @@ public class MeasureOperationsProvider {
         }else {
             return 
             //TODO: this needs to be restricted to only the current measure.  It seems to be returning all versions in history.
-                this.measureResourceProvider.getDao().search(theParams).getResources(0, 1000)
+                this.measureResourceProvider.getDao().search(theParams).getAllResources()
                     .stream()
                     .filter(resource -> ((Measure)resource).getUrl() != null && !((Measure)resource).getUrl().equals(""))
                     .collect(Collectors.toList());
         }
+    }
+
+    @Operation(name = "$report", idempotent = true, type = MeasureReport.class)
+    public Parameters report(@OperationParam(name = "periodStart", min = 1, max = 1) String periodStart,
+                                     @OperationParam(name = "periodEnd", min = 1, max = 1) String periodEnd,
+                                     @OperationParam(name = "subject", min = 1, max = 1) String subject) throws FHIRException {      
+        if (periodStart == null) {
+            throw new IllegalArgumentException("Parameter 'periodStart' is required.");
+        }    
+        if (periodEnd == null) {
+            throw new IllegalArgumentException("Parameter 'periodEnd' is required.");
+        }    
+        Date periodStartDate = DateHelper.resolveRequestDate(periodStart, true);
+        Date periodEndDate = DateHelper.resolveRequestDate(periodEnd, false);
+      
+        if (periodStartDate.after(periodEndDate)) {
+            throw new IllegalArgumentException("Parameter 'periodStart' must be before 'periodEnd'.");
+        }
+
+        if (!subject.startsWith("Patient/") && !subject.startsWith("Group/")) {
+            throw new IllegalArgumentException("Parameter 'subject' must be in the format 'Patient/[id]' or 'Group/[id]'.");
+        }
+
+        Parameters returnParams = new Parameters();
+        returnParams.setId(subject.replace("/", "-") + "-report");
+        
+        (getPatientListFromSubject(subject))
+            .forEach(
+                patientSubject -> {
+                    Parameters.ParametersParameterComponent patientParameter = patientReport(periodStartDate, periodEndDate, patientSubject);
+                    returnParams.addParameter(patientParameter);
+                }
+            );        
+
+        return returnParams;
+    }
+
+    private Parameters.ParametersParameterComponent patientReport(Date periodStart, Date periodEnd, String subject) {
+        SearchParameterMap theParams = SearchParameterMap.newSynchronous();
+        StringParam subjectParam = new StringParam(subject);
+        theParams.add("subject", subjectParam);
+
+        Bundle patientReportBundle = new Bundle();
+            patientReportBundle.setType(Bundle.BundleType.COLLECTION);
+            // no timestamp in DSTU3
+            //patientReportBundle.setTimestamp(new Date());
+            patientReportBundle.setId(subject.replace("/", "-") + "-report");
+            patientReportBundle.setIdentifier(new Identifier().setSystem("urn:ietf:rfc:3986").setValue("urn:uuid:" + UUID.randomUUID().toString()));
+            
+        IFhirResourceDao<MeasureReport> measureReportDao = this.registry.getResourceDao(MeasureReport.class);
+        measureReportDao.search(theParams).getAllResources().forEach(baseResource -> {
+            MeasureReport measureReport = (MeasureReport)baseResource;        
+            if (measureReport.getPeriod().getStart().before(periodStart) || measureReport.getPeriod().getEnd().after(periodEnd)) {
+                return;
+            }           
+            
+            patientReportBundle.addEntry(
+                new Bundle.BundleEntryComponent()
+                    .setResource(measureReport)
+                    .setFullUrl(getFullUrl(measureReport.fhirType(), measureReport.getIdElement().getIdPart()))
+            );
+        });
+
+        Parameters.ParametersParameterComponent patientParameter = new Parameters.ParametersParameterComponent();
+            patientParameter.setResource(patientReportBundle);
+            patientParameter.setId(subject.replace("/", "-") + "-report");
+            patientParameter.setName("return");
+        return patientParameter;
+    }
+
+    private List<String> getPatientListFromSubject(String subject) {
+        List<String> patientList = null;
+        if (subject.startsWith("Patient/")) {        
+            patientList = new ArrayList<String>();
+            patientList.add(subject);
+        } else if (subject.startsWith("Group/")) {
+            patientList = getPatientListFromGroup(subject);
+        }
+        return patientList;
     }
 
     @Operation(name = "$collect-data", idempotent = true, type = Measure.class)

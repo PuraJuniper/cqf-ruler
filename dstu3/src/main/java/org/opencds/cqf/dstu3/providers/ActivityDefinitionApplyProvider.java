@@ -1,10 +1,12 @@
 package org.opencds.cqf.dstu3.providers;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 import javax.inject.Inject;
+import javax.inject.Named;
 
 import org.hl7.fhir.dstu3.model.ActivityDefinition;
 import org.hl7.fhir.dstu3.model.Attachment;
@@ -23,7 +25,6 @@ import org.hl7.fhir.dstu3.model.StringType;
 import org.hl7.fhir.dstu3.model.SupplyRequest;
 import org.hl7.fhir.exceptions.FHIRException;
 import org.opencds.cqf.common.exceptions.ActivityDefinitionApplyException;
-import org.opencds.cqf.cql.engine.fhir.model.Dstu3FhirModelResolver;
 import org.opencds.cqf.cql.engine.model.ModelResolver;
 import org.opencds.cqf.dstu3.helpers.Helper;
 import org.springframework.stereotype.Component;
@@ -47,8 +48,8 @@ public class ActivityDefinitionApplyProvider {
 
     @Inject
     public ActivityDefinitionApplyProvider(FhirContext fhirContext, CqlExecutionProvider executionProvider,
-            IFhirResourceDao<ActivityDefinition> activityDefinitionDao) {
-        this.modelResolver = new Dstu3FhirModelResolver();
+            IFhirResourceDao<ActivityDefinition> activityDefinitionDao, @Named("dstu3ModelResolver") ModelResolver modelResolver) {
+        this.modelResolver = modelResolver;
         this.executionProvider = executionProvider;
         this.activityDefinitionDao = activityDefinitionDao;
 
@@ -146,8 +147,16 @@ public class ActivityDefinitionApplyProvider {
         // status, intent, code, and subject are required
         ProcedureRequest procedureRequest = new ProcedureRequest();
         procedureRequest.setStatus(ProcedureRequest.ProcedureRequestStatus.DRAFT);
-        procedureRequest.setIntent(ProcedureRequest.ProcedureRequestIntent.ORDER);
-        procedureRequest.setSubject(new Reference(patientId));
+        procedureRequest.setIntent(ProcedureRequest.ProcedureRequestIntent.PROPOSAL);
+        String patientReferenceString = patientId;
+        URI patientIdAsUri = URI.create(patientReferenceString);
+
+        if (!patientIdAsUri.isAbsolute()
+                && patientIdAsUri.getFragment() == null
+                && !patientReferenceString.startsWith("Patient/")) {
+            patientReferenceString = "Patient/" + patientId;
+        }
+        procedureRequest.setSubject(new Reference(patientReferenceString));
 
         if (practitionerId != null) {
             procedureRequest.setRequester(

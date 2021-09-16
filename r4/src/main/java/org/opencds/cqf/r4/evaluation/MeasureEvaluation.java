@@ -82,21 +82,21 @@ public class MeasureEvaluation {
     }
 
     private List<Patient> getPractitionerPatients(String practitionerRef) {
-        SearchParameterMap map = new SearchParameterMap();
+        SearchParameterMap map = SearchParameterMap.newSynchronous();
         map.add("general-practitioner", new ReferenceParam(
                 practitionerRef.startsWith("Practitioner/") ? practitionerRef : "Practitioner/" + practitionerRef));
 
         List<Patient> patients = new ArrayList<>();
         IBundleProvider patientProvider = registry.getResourceDao("Patient").search(map);
-        List<IBaseResource> patientList = patientProvider.getResources(0, patientProvider.size());
+        List<IBaseResource> patientList = patientProvider.getAllResources();
         patientList.forEach(x -> patients.add((Patient) x));
         return patients;
     }
 
     private List<Patient> getAllPatients() {
         List<Patient> patients = new ArrayList<>();
-        IBundleProvider patientProvider = registry.getResourceDao("Patient").search(new SearchParameterMap());
-        List<IBaseResource> patientList = patientProvider.getResources(0, patientProvider.size());
+        IBundleProvider patientProvider = registry.getResourceDao("Patient").search(SearchParameterMap.newSynchronous());
+        List<IBaseResource> patientList = patientProvider.getAllResources();
         patientList.forEach(x -> patients.add((Patient) x));
         return patients;
     }
@@ -161,7 +161,7 @@ public class MeasureEvaluation {
         Extension obsExtension = new Extension().setUrl("http://hl7.org/fhir/StructureDefinition/cqf-measureInfo");
         Extension extExtMeasure = new Extension()
                 .setUrl("measure")
-                .setValue(new CanonicalType("http://hl7.org/fhir/us/cqfmeasures/" + report.getMeasure()));
+                .setValue(new CanonicalType(report.getMeasure()));
         obsExtension.addExtension(extExtMeasure);
         Extension extExtPop = new Extension()
                 .setUrl("populationId")
@@ -263,8 +263,11 @@ public class MeasureEvaluation {
         MeasureReportBuilder reportBuilder = new MeasureReportBuilder();
         reportBuilder.buildStatus("complete");
         reportBuilder.buildType(type);
-        reportBuilder.buildMeasureReference(
-                measure.getIdElement().getResourceType() + "/" + measure.getIdElement().getIdPart());
+        try {
+            reportBuilder.buildMeasureReference(measure.getUrl());
+        } catch (Exception e) {
+            logger.error("Measure must have a canonical url.");
+        }
         if (type == MeasureReport.MeasureReportType.INDIVIDUAL && !patients.isEmpty()) {
             IdType patientId = patients.get(0).getIdElement();
             reportBuilder.buildPatientReference(patientId.getResourceType() + "/" + patientId.getIdPart());
@@ -538,10 +541,10 @@ public class MeasureEvaluation {
             for (String element : codeToResourceMap.get(key)) {
                 if (referenceMap.containsKey(element)) {
                     referenceMap.get(element).addExtension("http://hl7.org/fhir/us/davinci-deqm/StructureDefinition/extension-populationReference",
-                        new CodeableConcept().addCoding(
-                            new Coding("http://teminology.hl7.org/CodeSystem/measure-population", key.getLeft(), key.getRight())
-                    ));
-                    evaluatedResourceIds.add(referenceMap.get(element));
+                        new StringType(key.getLeft()));
+                    if (!evaluatedResourceIds.contains(referenceMap.get(element))) {
+                        evaluatedResourceIds.add(referenceMap.get(element));
+                    }
                 } else {
                     org.hl7.fhir.r4.model.ListResource.ListEntryComponent comp = new org.hl7.fhir.r4.model.ListResource.ListEntryComponent();
                     Reference reference = new Reference(element);
@@ -549,10 +552,10 @@ public class MeasureEvaluation {
                     list.addEntry(comp);
                     // Do not want to add extension to ListEntryReference
                     reference.addExtension("http://hl7.org/fhir/us/davinci-deqm/StructureDefinition/extension-populationReference",
-                        new CodeableConcept().addCoding(
-                            new Coding("http://teminology.hl7.org/CodeSystem/measure-population", key.getLeft(), key.getRight())
-                    ));
-                    evaluatedResourceIds.add(reference);
+                            new StringType(key.getLeft()));
+                    if (!evaluatedResourceIds.contains(reference)) {
+                        evaluatedResourceIds.add(reference);
+                    }
                     referenceMap.put(element, reference);
                 }
             }
@@ -657,7 +660,7 @@ public class MeasureEvaluation {
                 Extension obsExtension = new Extension().setUrl("http://hl7.org/fhir/StructureDefinition/cqf-measureInfo");
                 Extension extExtMeasure = new Extension()
                         .setUrl("measure")
-                        .setValue(new CanonicalType("http://hl7.org/fhir/us/cqfmeasures/" + report.getMeasure()));
+                        .setValue(new CanonicalType(report.getMeasure()));
                 obsExtension.addExtension(extExtMeasure);
                 Extension extExtPop = new Extension()
                         .setUrl("populationId")
